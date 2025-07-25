@@ -1,36 +1,55 @@
-module Parser where
+module Parser (Command(..), Segment(..), parseFile)  where
 
-import Text.Read (readMaybe)
+import Data.Maybe (mapMaybe)
 
-data CommandType = C_ARITHMETIC | C_POP | C_PUSH
+data Segment = Argument | Local | Static | Constant | This | That | Pointer | Temp
   deriving (Show, Eq)
 
-logicCmd :: [String]
-logicCmd = ["add", "sub", "neg", "and", "or", "not", "ls", "eq", "gt"]
+data Command
+  = Push Segment Int
+  | Pop Segment Int
+  | Add | Sub | Neg
+  | Eq | Gt | Lt
+  | And | Or | Not
+  deriving (Show, Eq)
 
-commandType :: String -> Maybe CommandType
-commandType cmd
-  | cmd == "pop" = Just C_POP
-  | cmd == "push" = Just C_PUSH
-  | cmd `elem` logicCmd = Just C_ARITHMETIC
-  | otherwise = Nothing
+parseFile :: FilePath -> IO [Command]
+parseFile path = do
+  contents <- readFile path
+  let ls = map cleanLine (lines contents)
+  return $ mapMaybe parseCommand (filterNull ls)
 
-fstCmd :: String -> Maybe CommandType
-fstCmd = commandType . head . words
+cleanLine :: String -> String
+cleanLine = takeWhile (/= '/') . dropWhile (== ' ')
 
-nthWord :: Int -> String -> String
-nthWord n = (!! n) . words
+filterNull :: [String] -> [String]
+filterNull = filter (not . null)
 
-arg1 :: String -> String
-arg1 line = case fstCmd line of
-  Just C_ARITHMETIC -> nthWord 0 line
-  Just C_POP -> nthWord 1 line
-  Just C_PUSH -> nthWord 1 line
-  _ -> "Parser error!"
+parseCommand :: String -> Maybe Command
+parseCommand line =
+  case words line of
+    ["push", seg, n] -> Push <$> parseSegment seg <*> pure (read n)
+    ["pop", seg, n]  -> Pop  <$> parseSegment seg <*> pure (read n)
+    ["add"]  -> Just Add
+    ["sub"]  -> Just Sub
+    ["neg"]  -> Just Neg
+    ["eq"]   -> Just Eq
+    ["gt"]   -> Just Gt
+    ["lt"]   -> Just Lt
+    ["and"]  -> Just And
+    ["or"]   -> Just Or
+    ["not"]  -> Just Not
+    _        -> Nothing
 
-arg2 :: String -> Maybe Int
-arg2 line = case fstCmd line of
-  Just C_POP -> readMaybe . nthWord 2 $ line
-  Just C_PUSH -> readMaybe . nthWord 2 $ line
-  _ -> Nothing
-
+parseSegment :: String -> Maybe Segment
+parseSegment s =
+  case s of
+    "argument" -> Just Argument
+    "local"    -> Just Local
+    "static"   -> Just Static
+    "constant" -> Just Constant
+    "this"     -> Just This
+    "that"     -> Just That
+    "pointer"  -> Just Pointer
+    "temp"     -> Just Temp
+    _          -> Nothing

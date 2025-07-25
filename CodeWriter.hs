@@ -1,223 +1,104 @@
-module CodeWriter where
-import Parser (arg1)
+module CodeWriter (writeFileCommands) where
 
-toStack :: String
-toStack = "@SP\n\
-	  \A=M\n\
-	  \M=D\n\
-	  \@SP\n\
-	  \M=M+1"
+import Parser (Command (..), Segment (..))
+import System.FilePath (takeBaseName)
+import Control.Monad.State
 
-fromStack :: String
-fromStack = "@SP\n\
-	    \AM=M-1\n\
-	    \D=M"
+writeFileCommands :: FilePath -> [Command] -> [String]
+writeFileCommands fileName commands =
+  evalState (fmap concat $ mapM (writeCommand . takeBaseName $ fileName) commands) 0
 
-preop :: String
-preop = "@SP\n\
-	\D=M"
+writeCommand :: String -> Command -> State Int [String]
+writeCommand file (Pop seg i)  = return $ writePop file seg i
+writeCommand file (Push seg i) = return $ writePush file seg i
+writeCommand _ Add             = return $ writeArithmetic "add"
+writeCommand _ Sub             = return $ writeArithmetic "sub"
+writeCommand _ Neg             = return $ writeArithmetic "neg"
+writeCommand _ And             = return $ writeArithmetic "and"
+writeCommand _ Or              = return $ writeArithmetic "or"
+writeCommand _ Not             = return $ writeArithmetic "not"
+writeCommand _ Eq              = writeCompare "JEQ"
+writeCommand _ Gt              = writeCompare "JGT"
+writeCommand _ Lt              = writeCompare "JLT"
+writeCommand _ _               = return ["// Invalid command"]
 
-writeArithmetic :: String -> String
-writeArithmetic = undefined
+toStack :: [String]
+toStack = ["@SP","A=M","M=D","@SP","M=M+1"]
 
-writePopPush :: String -> String
-writePopPush line = case arg1 line of 
-  "local" -> undefined
+fromStack :: [String]
+fromStack = ["@SP", "AM=M-1", "D=M"]
 
+writeArithmetic :: String -> [String]
+writeArithmetic cmd =
+  fromStack ++
+  (if cmd == "neg" || cmd == "not" then [] else ["A=A-1"]) ++
+  [case cmd of
+     "add" -> "M=D+M"
+     "sub" -> "M=M-D"
+     "neg" -> "M=-M"
+     "and" -> "M=D&M"
+     "or"  -> "M=D|M"
+     "not" -> "M=!M"
+  ]
 
-{-
+writeCompare :: String -> State Int [String]
+writeCompare jump =
+  do
+    c <- get
+    modify (+1)
+    let trueLabel = "TRUE_" ++ show c
+    let endLabel  = "END_" ++ show c
+    return
+      [ "@SP", "AM=M-1", "D=M", "A=A-1", "D=M-D",
+        "@" ++ trueLabel, "D;" ++ jump,
+        "@SP", "A=M-1", "M=0",
+        "@" ++ endLabel, "0;JMP",
+        "(" ++ trueLabel ++ ")", "@SP", "A=M-1", "M=-1",
+        "(" ++ endLabel ++ ")"
+      ]
 
-// add D to stack and increase = D>SP+
-@SP
-A=M
-M=D
-@SP
-M=M+1
+writePush :: String -> Segment -> Int -> [String]
+writePush file seg i = ("// " ++  show seg ++ ' ' : show i) :
+  case seg of
+    Constant -> ['@' : show i, "D=A"]
+    Static   -> ['@' : (file ++ ('.' : show i)), "D=M"]
+    Temp     -> ['@' : show (5+i), "D=M"]
+    Pointer  -> case i of
+                  0 -> ['@' : "THIS", "D=M"]
+                  1 -> ['@' : "THAT", "D=M"]
+    Local    -> pushSeg4 "LCL" i 
+    Argument -> pushSeg4 "ARG" i
+    This     -> pushSeg4 "THIS" i
+    That     -> pushSeg4 "THAT" i
+  ++ toStack
 
-// remove from stack to D = SP>D-
-@SP
-AM=M-1
-D=M
+pushSeg4 :: String -> Int -> [String]
+pushSeg4 seg i = 
+  case i of
+    0 -> ['@' : seg, "D=M"]
+    1 -> ['@' : seg, "D=M+1"]
+    2 -> ['@' : seg, "D=M+1", "D=D+1"]
+    3 -> ['@' : seg, "D=M+1", "D=D+1", "D=D+1"]
+    _ -> ['@' : seg, "D=M", '@' : show i, "A=D+A", "D=M"]
 
-// needed before op = PREOP
-@SP
-A=M-1
+writePop :: String -> Segment -> Int -> [String]
+writePop file seg i = ("// " ++ show seg ++ ' ' : show i) :
+  case seg of
+    Constant -> ["// pop constant not allowed"]
+    Static   -> fromStack ++ ['@' : (file ++ ('.' : show i)), "M=D"]
+    Temp     -> fromStack ++ ['@' : show (5+i), "M=D"]
+    Pointer  -> case i of
+                  0 -> fromStack ++ ['@' : "THIS", "M=D"]
+                  1 -> fromStack ++ ['@' : "THAT", "M=D"]
+    Local    -> popSeg4 "LCL" i
+    Argument -> popSeg4 "ARG" i
+    This     -> popSeg4 "THIS" i
+    That     -> popSeg4 "THAT" i
 
-
-
-
-// push constant i
-@i
-D=A
-\ D>SP+
-
-// pop seg4 i  (i > 6)
-@SEG
-D=M
-@i
-D=D+A
-@R13
-M=D
-\ SP>D-
-@R13
-A=M
-M=D
-
-// pop seg4 0
-\ SP>D-
-@SEG
-A=M
-M=D
-
-// pop seg4 i (1-6)
-\ SP>D-
-@SEG
-A=M+1
-A=A+1 * (i-1)
-M=D
-
-// push seg4 i (i > 3)
-@SEG
-D=M
-@i
-A=D+A
-D=M
-\ D>SP+
-
-// push seg4 0
-@SEG
-D=M
-\ D>SP+
-
-// push seg4 1
-@SEG
-D=M+1
-\ D>SP+
-
-// push seg4 2
-@SEG
-D=M+1
-D=D+1
-\ D>SP+
-
-// push seg4 3
-@SEG
-D=M+1
-D=D+1
-D=D+1
-\ D>SP+
-
-// pop static i
-\ SP>D-
-@filename.i
-M=D
-
-// push static i
-@filename.i
-D=M
-\ D>SP+
-
-// pop temp i
-\ SP>D-
-@5+i
-M=D
-
-// push temp i
-@5+i
-D=M
-\ D>SP+
-
-// pop pointer 0
-\ SP>D-
-@THIS
-M=D
-
-// push pointer 0
-@THIS
-D=M
-\ D>SP+
-
-// pop pointer 1
-\ SP>D-
-@THAT
-M=D
-
-// push pointer 1
-@THAT
-D=M
-\ D>SP+
-
-// add
-\ SP>D-
-\ PREOP
-M=D+M
-
-// sub
-\ SP>D-
-\ PREOP
-M=M-D
-
-// neg
-\ PREOP
-M=-M
-
-// and
-\ SP>D-
-\ PREOP
-M=D&M
-
-// or
-\ SP>D-
-\ PREOP
-M=D|M
-
-// not
-\ PREOP
-M=!M
-
-// eq
-\ SP>D-
-\ PREOP
-D=M-D
-@JUMP_cj
-D;JEQ
-\ PREOP
-M=-1
-@END_ce
-0;JMP
-(JUMP_cj)
-\ PREOP
-M=0
-(END_ce)
-
-// lt
-\ SP>D-
-\ PREOP
-D=M-D
-@JUMP_cj
-D;JLT
-\ PREOP
-M=-1
-@END_ce
-0;JMP
-(JUMP_cj)
-\ PREOP
-M=0
-(END_ce)
-
-// gt
-\ SP>D-
-\ PREOP
-D=M-D
-@JUMP_cj
-D;JGT
-\ PREOP
-M=-1
-@END_ce
-0;JMP
-(JUMP_cj)
-\ PREOP
-M=0
-(END_ce)
-
--}
+popSeg4 :: String -> Int -> [String]
+popSeg4 seg i  
+  | i == 0 = fromStack ++ ['@' : seg, "A=M", "M=D"]
+  | i <= 6 = fromStack ++ ['@' : seg, "A=M+1"] ++
+             replicate (i - 1) "A=A+1" ++ ["M=D"] 
+  | i > 6  = ['@' : seg, "D=M", '@' : show i, "D=D+A",
+              "@R13", "M=D"] ++ fromStack ++ ["@R13", "A=M", "M=D"]
